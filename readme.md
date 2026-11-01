@@ -1,57 +1,53 @@
-# Silently Deploying VMware Tools via Microsoft Intune (Win32 App)
+# Silently Deploying a Win32 App via Microsoft Intune (Bypassing UAC)
 
-## 📌 Objective
-Demonstrate how to package, upload, and silently deploy a legacy executable to a Windows 11 client using Microsoft Intune, effectively bypassing User Account Control (UAC) prompts for standard users on an Entra-joined device.
+## 📌 Project Overview
+In a corporate environment, standard users should not be prompted for Global Admin credentials to install required software. This project demonstrates how to package a legacy installer (VMware Tools) into an `.intunewin` file and deploy it silently to an Entra-joined Windows 11 VM using Microsoft Intune, bypassing the User Account Control (UAC) prompt by executing in the `System` context.
 
-## 🏗️ Environment & Prerequisites
-* **Cloud:** Microsoft 365 Business Premium tenant (Entra ID P1 + Intune Plan 1)
-* **Endpoint:** Windows 11 Pro Virtual Machine (Entra-joined)
-* **Tools:** Microsoft Win32 Content Prep Tool (`IntuneWinAppUtil.exe`)
-* **Payload:** VMware Tools (`setup.exe`)
+## 🏗️ Lab Environment
+* **Cloud Environment:** Microsoft 365 Business Premium Trial (Entra ID P1 + Intune)
+* **Client Device:** Windows 11 Pro (Virtual Machine)
+* **Deployment Tool:** Microsoft Win32 Content Prep Tool (`IntuneWinAppUtil.exe`)
+* **Application:** VMware Tools (`windows.iso`)
 
----
+## 🚀 Execution Steps
 
-## 🛠️ Step 1: Packaging the Payload
-To deploy an `.exe` via Intune, it must first be wrapped in an `.intunewin` container.
-1. Extracted the `windows.iso` payload from the host machine into a staging folder `C:\IntunePack\Source`. Ensure the `Program Files` dependency folders are included alongside `setup.exe`.
-2. Ran the Microsoft Win32 Content Prep Tool to compress the directory into `setup.intunewin`.
+### 1. Extracting and Packaging the Installer
+Instead of copying the installer from inside the VM, the raw ISO was mounted directly on the host machine.
+* Copied `setup.exe` and the supporting `Program Files` directory into a staging folder (`C:\IntunePack\Source`).
+* Ran the **Win32 Content Prep Tool** to recursively compress the directory into a deployable package.
 
-*[Insert Screenshot of the Command Prompt showing IntuneWinAppUtil.exe completing the package]*
+```cmd
+IntuneWinAppUtil.exe -c C:\IntunePack\Source -s setup.exe -o C:\IntunePack\Output
+```
 
----
+![Win32 Content Prep Tool Execution](assets/images/content_prep_tool.png)
 
-## ☁️ Step 2: Configuring the Intune Win32 App
-Uploaded the `.intunewin` package to the Microsoft Intune admin center and configured the installation behavior.
+### 2. Configuring the Intune Win32 App
+Uploaded the generated `setup.intunewin` file to the Microsoft Intune admin center and configured the silent execution parameters.
 
-**Installation Commands:**
+**Program Settings:**
 * **Install command:** `setup.exe /S /v"/qn REBOOT=R"`
-  * *Why:* `/S` suppresses the InstallShield wrapper. `/v"/qn REBOOT=R"` passes silent mode and suppresses the reboot to the underlying MSI.
+  * `/S`: Suppresses the InstallShield wrapper UI.
+  * `/v"/qn REBOOT=R"`: Passes quiet mode and reboot suppression commands directly to the underlying MSI.
 * **Uninstall command:** `setup.exe /S /v"/qn REMOVE=ALL"`
-* **Install behavior:** `System` 
-  * *Impact:* This is critical. Running as System bypasses the UAC prompt that would normally block standard users from installing software.
+* **Install behavior:** `System` *(Crucial step: This ensures the Intune Management Extension installs the app using the high-privilege SYSTEM account, completely bypassing UAC prompts for standard users).*
 
-*[Insert image_10c4dd.png here - showing the Program configuration tab]*
+![Intune Program settings showing the commands and System toggle](assets/images/installtion_commands.png)
 
----
-
-## 🔍 Step 3: Setting Detection Rules
-Intune requires a detection rule to verify the installation succeeded and prevent continuous installation loops. 
-* **Rule type:** File
+### 3. Creating the Detection Rule
+To ensure Intune can verify the installation success without relying on fluctuating MSI product codes, a **File-based detection rule** was created to check for the presence of the primary service executable.
 * **Path:** `C:\Program Files\VMware\VMware Tools`
-* **File:** `vmtoolsd.exe`
+* **File or folder:** `vmtoolsd.exe`
 * **Detection method:** File or folder exists
 
----
+![Intune Detection rules tab](assets/images/detection_rules.png)
 
-## 🚀 Step 4: Deployment & Triage
-Assigned the application to the test Security Group. 
+### 4. Deployment and Verification
+* Assigned the application as **Required** to the `SG-Intune-Pilot-Users` security group.
+* To bypass the standard Intune polling interval, forced a manual sync from the Windows 11 VM (`Settings > Accounts > Access work or school > Info > Sync`).
+* Verified background execution by monitoring `msiexec.exe` in Task Manager and checking the `IntuneManagementExtension.log`.
+* **Result:** VMware Tools installed silently in the background, successfully enabling clipboard sharing and drag-and-drop between the host and the VM without any user interaction.
 
-**Verification:**
-Instead of waiting for the scheduled Intune check-in, I forced a manual sync. Standard users cannot force a sync via the Windows Settings GUI, so I restarted the VM to trigger the Intune Management Extension service on boot.
-
-*[Insert image_0ff2fe.png here - showing the Intune portal "Waiting for install status"]*
-
-To verify the background installation locally while the Intune portal was catching up, I monitored the local Intune logs:
-* **Log Path:** `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\IntuneManagementExtension.log`
-
-**Result:** The application installed silently in the background, populating the local directory and enabling host-to-guest clipboard sharing without requiring any user interaction.
+![Intune Monitor - Waiting for install status](assets/images/waiting_for_install.png)
+<br>
+![Intune Management Extension Log showing background execution](assets/images/intune_management_extension_log.png)
